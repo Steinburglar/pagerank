@@ -4,22 +4,88 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy import sparse
+from scipy.sparse import csr_matrix, issparse
+from scipy.sparse.linalg import eigs
 
 class PowerMethod:
-    def __init__(self, matrix, alpha, tol=1e-6, max_iter=1000):
+    def __init__(self, matrix, alpha, tol=1e-6, max_iter=1000, MODE = 'auto'):
         """
         Initialize the PowerMethod instance.
         general designed to have one matrix per instance.
+        assumes a sparse or dense numpy array input with NO DANGLING NODES (i.e. already handled).
         :param matrix: The Pagerank Matrix
         """
+
+        self.dangle_check(matrix)
+        self.matrix, self.issparse = self.choose_matrix_format(matrix, mode=auto)
         self.matrix = matrix
+        self.n = matrix.shape[0]
         self.alpha = alpha #for nome, just a tag for identification later on. assuming matrix contains alpha already.
         self.tol = tol
         self.max_iter = max_iter
-        self.state = np.ones(matrix.shape[0]) / matrix.shape[0]  # Start with uniform distribution
+        self.state = np.ones(self.n) / self.n # Start with uniform distribution
         self.residuals = []
-        self.v = np.ones(matrix.shape[0]) / matrix.shape[0]  # Personalization vector (uniform)
+        self.v = np.ones(self.n)/ self.n # Personalization vector (uniform)
         self.pi = None # this is the final eigenvector
+
+    @staticmethod
+    def dangle_check(matrix):
+        """
+        checks to make sure matrix is appropriate: all collumns sum to 1
+        """
+        col_sums = np.asarray(matrix.sum(axis=0)).flatten()
+        if not np.allclose(col_sums, 1):
+            raise ValueError("Matrix contains dangling nodes (columns that do not sum to 1). Please handle dangling nodes before using PowerMethod.")
+    @staticmethod
+    def mode_check(matrix):
+        """
+        checks to see if matrix is dense or sparse
+        """
+        if sparse.issparse(matrix):
+            return 'sparse'
+        elif isinstance(matrix, np.ndarray):
+            return 'dense'
+        else:
+            raise TypeError("Matrix must be either a numpy array or a scipy sparse matrix.")
+
+    @staticmethod
+    def choose_matrix_format(matrix, mode='auto', size_thresh=1000, density_thresh=0.1):
+        """
+        Convert `matrix` to either dense (numpy.ndarray) or sparse CSR depending on `mode`.
+        Returns (A_converted, is_sparse_bool).
+        mode: 'auto'|'sparse'|'dense'
+        Simple heuristic for 'auto': use sparse if n > size_thresh and density <= density_thresh.
+        """
+        # detect input and basic size info
+        if issparse(matrix):
+            n = matrix.shape[0]
+            nnz = matrix.nnz
+        else:
+            A = np.asarray(matrix)
+            n = A.shape[0]
+            nnz = np.count_nonzero(A)
+
+        density = nnz / (n * n)
+        if mode == 'auto':
+            use_sparse = (n > size_thresh) and (density <= density_thresh)
+        elif mode == 'sparse':
+            use_sparse = True
+        elif mode == 'dense':
+            use_sparse = False
+        else:
+            raise ValueError("mode must be 'auto', 'sparse' or 'dense'")
+
+        if use_sparse:
+            if not issparse(matrix):
+                return csr_matrix(matrix, dtype=float), True
+            return matrix.tocsr().astype(float), True
+        else:
+            if issparse(matrix):
+                return matrix.toarray().astype(float), False
+            return np.asarray(matrix, dtype=float), False
+
+
 
     def __getitem__(self, key):
         #to make accessing variables easier
@@ -91,6 +157,8 @@ class MultiPlotter():
     def plot_residuals(self, filters, label_attributes, ax=None, fits = True, show = True):
         """
         Plot residuals for PowerMethod instances that match the given filters.
+        This method is a little confusing, the hope is to make it easy to control what you want to plot from just a few parameters
+        in the notebook/script, but that means some complexity on the backend here.
         :param filters: Dictionary of attributes to filter PowerMethod instances.
         :param label_attributes: List of attributes to include in the plot labels.
         :param ax: Matplotlib axis to plot on. If None, a new figure and axis are created.
